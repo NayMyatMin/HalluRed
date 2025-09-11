@@ -1,0 +1,11 @@
+manuscript.tex
+.cache
+.ipynb_checkpoints
+data
+logs
+*.txt
+*.pkl
+*.pt
+*.pth
+*.onnx
+*.onnx.
