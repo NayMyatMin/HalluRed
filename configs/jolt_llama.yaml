@@ -1,0 +1,39 @@
+model: meta-llama/Llama-2-7b-chat-hf
+
+lora:
+  targets: [q_proj, k_proj, v_proj, down_proj]
+  r: 8
+  alpha: 16
+  dropout: 0.05
+
+windows:
+  early_len: 64
+  use_answer_span: true
+  mode: answer
+
+adv:
+  epsilon: 0.0005
+
+loss:
+  lambda_: 0.5
+
+telemetry:
+  nii_weighting: magnitude
+  nii_min_norm: 0.0001
+  head_sample: 4
+
+train:
+  batch_size: 1
+  max_steps: 500
+  eval_every: 50
+  lr: 0.0002
+  grad_accum_steps: 8
+  save_dir: checkpoints
+  save_every: 0
+
+data:
+  corpus: squad
+  split: train
+  limit: null
+
+

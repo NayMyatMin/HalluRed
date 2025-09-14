@@ -9,3 +9,5 @@ logs
 *.pth
 *.onnx
 *.onnx.
+
+docs/JOLT_Tech_Spec.md

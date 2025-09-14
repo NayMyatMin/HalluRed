@@ -34,6 +34,16 @@ def get_scores_dict(model_name_or_path, data, mt_list, args):
     generation_config = {}
     generation_config.update({"temperature": 0.6, "top_p": 0.9, "top_k": 50, "do_sample": True})
     model, tokenizer = load_model_and_tokenizer(model_name_or_path, dtype=torch.bfloat16, **generation_config)
+    # Optional: load LoRA adapter if provided via args
+    if getattr(args, "adapter_dir", None):
+        try:
+            from peft import PeftModel
+
+            model = PeftModel.from_pretrained(model, args.adapter_dir)
+            model.eval()
+            print(f"[INFO] Loaded adapter from {args.adapter_dir}")
+        except Exception as e:
+            print("[WARN] Failed to load adapter; proceeding with base model. Error:", e)
     tok_lens, labels, tok_ins = [], [], []
 
     scores = []

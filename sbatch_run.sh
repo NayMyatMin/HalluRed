@@ -28,7 +28,7 @@
 set -euo pipefail
 
 # Resolve repository working directory
-WORKDIR="/common/home/users/m/myatmin.nay.2022/LLM_Check_Hallucination_Detection"
+WORKDIR="/common/home/users/m/myatmin.nay.2022/HalluRed"
 cd "$WORKDIR"
 
 # Ensure log and data directories exist for SBATCH outputs and results
@@ -78,12 +78,15 @@ export HF_DATASETS_CACHE="$HF_HOME/datasets"
 mkdir -p "$HF_HOME" "$TRANSFORMERS_CACHE" "$HF_DATASETS_CACHE"
 
 # Default run configuration can be overridden via sbatch --export=ALL,VAR=val
+# Canonical LLM-Check usage (includes hidden by default):
+#   sbatch --export=ALL,MODEL=llama,DATASET=selfcheck,N_SAMPLES=0,MT_LIST="logit hidden attns",USE_TOKLENS=1 \
+#          /common/home/users/m/myatmin.nay.2022/HalluRed/sbatch_run.sh
 MODEL="${MODEL:-llama}"
 DATASET="${DATASET:-selfcheck}"
 N_SAMPLES="${N_SAMPLES:-200}"
 USE_TOKLENS="${USE_TOKLENS:-0}"
-# Space-separated list like: "logit attns"; default picks the fast metrics
-MT_LIST="${MT_LIST:-logit attns}"
+# Space-separated list like: "logit hidden attns"; default includes 'hidden' for standard LLM-Check
+MT_LIST="${MT_LIST:-logit hidden attns}"
 
 # Build method args
 MT_ARGS=""

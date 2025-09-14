@@ -9,6 +9,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--model", type=str, default="vicuna7b")
 parser.add_argument("--n_samples", type=int, default=100)
 parser.add_argument("--dataset", choices=["fava", "fava_annot", "selfcheck", "rag_truth"])
+parser.add_argument("--adapter_dir", type=str, default="", help="Path to LoRA adapter; if set, loads adapter on top of base model")
 parser.add_argument(
     "--use_toklens", action="store_true", help="remove prompt prefix before computing hidden and eigen scores"
 )
@@ -25,7 +26,7 @@ if __name__ == "__main__":
     mt_list = args.mt
 
     print(
-        f"Model: {args.model.lower()}, Method types: {mt_list}, Dataset: {args.dataset}, Use toklens: {args.use_toklens}"
+        f"Model: {args.model.lower()}, Method types: {mt_list}, Dataset: {args.dataset}, Use toklens: {args.use_toklens}, Adapter: {bool(args.adapter_dir)}"
     )
 
     # load dataset specific utils
@@ -38,5 +39,8 @@ if __name__ == "__main__":
 
     # save the scores to /data
     os.makedirs("data", exist_ok=True)
-    with open(f"data/scores_{args.dataset}_{args.model.lower()}_{n_samples}samp.pkl", "wb") as f:
+    suffix = "_adapter" if args.adapter_dir else ""
+    out_path = f"data/scores_{args.dataset}_{args.model.lower()}_{n_samples}samp{suffix}.pkl"
+    with open(out_path, "wb") as f:
         pkl.dump([scores, sample_indiv_scores, sample_labels], f)
+    print(f"[INFO] Saved scores to {out_path}")
