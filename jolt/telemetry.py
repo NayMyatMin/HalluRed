@@ -168,7 +168,7 @@ def compute_telemetry_torch(
 ) -> Dict[str, torch.Tensor]:
     """Differentiable telemetry (per-layer) for NII, VEI_hidden, VEI_attn.
 
-    Returns dict with keys: 'nii', 'vei_hid', 'vei_att' mapping to tensors of shape (L,),
+    Returns dict with keys: 'nii', 'vei_hid', 'vei_att', 'hid_logvol' mapping to tensors of shape (L,),
     where L is the number of transformer layers.
     """
     assert len(hidden_states) >= 2
@@ -179,7 +179,7 @@ def compute_telemetry_torch(
         # Degenerate: return zeros
         device = hidden_states[1].device
         zero = torch.zeros(L, dtype=torch.float32, device=device)
-        return {"nii": zero, "vei_hid": zero, "vei_att": zero}
+        return {"nii": zero, "vei_hid": zero, "vei_att": zero, "hid_logvol": zero}
     idx = torch.tensor(windows[0], dtype=torch.long, device=hidden_states[1].device)
 
     # Head-mean attentions (or first-k heads)
@@ -193,6 +193,7 @@ def compute_telemetry_torch(
     nii_vals: List[torch.Tensor] = []
     vh_vals: List[torch.Tensor] = []
     va_vals: List[torch.Tensor] = []
+    hv_vals: List[torch.Tensor] = []
 
     for layer_idx in range(1, len(hidden_states)):
         X_prev = hidden_states[layer_idx - 1]  # (B,T,D)
@@ -255,10 +256,32 @@ def compute_telemetry_torch(
             va_acc.append((tr * tr) / (tr2 + eps))
         va_vals.append(torch.stack(va_acc).mean())
 
+        # Hidden log-volume (token-centered covariance log-det)
+        hv_acc = []
+        Xm = X_curr[:, idx, :]  # (B,m,D)
+        for b in range(Xm.shape[0]):
+            Z = Xm[b].to(torch.float32)  # (m,D)
+            m_len = max(1, Z.shape[0])
+            # Center across tokens to isolate spread (aligns with detector)
+            Zc = Z - Z.mean(dim=0, keepdim=True)
+            C_tok = (Zc @ Zc.t()) / m_len
+            # Symmetrize and add magnitude-aware jitter for numerical stability
+            C_tok = 0.5 * (C_tok + C_tok.t())
+            jitter = eps + 1e-6 * torch.trace(C_tok).abs()
+            C_tok = C_tok + jitter * torch.eye(C_tok.shape[0], device=Z.device, dtype=Z.dtype)
+            sign, logabsdet = torch.slogdet(C_tok)
+            if (sign <= 0) or (not torch.isfinite(logabsdet)):
+                # Fallback: eigenvalue clamp
+                evals = torch.linalg.eigvalsh(C_tok)
+                logabsdet = torch.log(evals.clamp_min(eps)).sum()
+            hv_acc.append(logabsdet)
+        hv_vals.append(torch.stack(hv_acc).mean())
+
     return {
         "nii": torch.stack(nii_vals),
         "vei_hid": torch.stack(vh_vals),
         "vei_att": torch.stack(va_vals),
+        "hid_logvol": torch.stack(hv_vals),
     }
 
 

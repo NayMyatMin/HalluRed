@@ -1,4 +1,4 @@
-from typing import Callable, Dict, List, Tuple
+from typing import Callable
 
 import torch
 
@@ -7,7 +7,7 @@ def fgsm_embeddings(
     model,
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
-    pressure_fn: Callable[[Dict[str, List[float]]], torch.Tensor],
+    pressure_fn: Callable[[torch.nn.modules.container.ModuleDict], torch.Tensor],
     epsilon: float = 1e-3,
 ) -> torch.Tensor:
     """Compute FGSM-step in embedding space using a pressure function over telemetry.
@@ -32,15 +32,11 @@ def fgsm_embeddings(
         output_attentions=True,
         return_dict=True,
     )
-    # The pressure function is responsible for reading outputs.hidden_states/attentions
-    # from the outer scope (closure) or via a lambda binding.
-    pressure = pressure_fn({})
-    pressure.backward()
-    grad = embeds.grad
+    # The pressure function should aggregate outputs into a scalar pressure
+    pressure = pressure_fn(outputs)
+    grad = torch.autograd.grad(pressure, embeds, retain_graph=False, create_graph=False)[0]
     if grad is None:
-        # no grads; return original embeds
         return base_embeds.detach()
-    adv_embeds = embeds.detach() + epsilon * torch.sign(grad.detach())
-    return adv_embeds
+    return (embeds + epsilon * torch.sign(grad)).detach()
 
 

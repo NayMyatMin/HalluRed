@@ -40,26 +40,26 @@ def generate_plots(csv_path: str, out_dir: str):
     steps = df["step"].to_numpy()
 
     nii, _ = _parse_series(df["nii_layers"]) if "nii_layers" in df.columns else (np.zeros((0, 0)), 0)
-    vh, _ = _parse_series(df["vei_hid_layers"]) if "vei_hid_layers" in df.columns else (np.zeros((0, 0)), 0)
     va, _ = _parse_series(df["vei_att_layers"]) if "vei_att_layers" in df.columns else (np.zeros((0, 0)), 0)
+    hv, _ = _parse_series(df["hid_logvol_layers"]) if "hid_logvol_layers" in df.columns else (np.zeros((0, 0)), 0)
 
     has_adv = all(c in df.columns for c in [
-        "adv_nii_layers", "adv_vei_hid_layers", "adv_vei_att_layers"
+        "adv_nii_layers", "adv_vei_att_layers", "adv_hid_logvol_layers"
     ])
-    adv_nii, adv_vh, adv_va = (None, None, None)
+    adv_nii, adv_va, adv_hv = (None, None, None)
     if has_adv:
         adv_nii, _ = _parse_series(df["adv_nii_layers"])  # shape: (steps, L)
-        adv_vh, _ = _parse_series(df["adv_vei_hid_layers"]) 
         adv_va, _ = _parse_series(df["adv_vei_att_layers"]) 
+        adv_hv, _ = _parse_series(df["adv_hid_logvol_layers"]) 
 
     has_delta = all(c in df.columns for c in [
-        "delta_nii_layers", "delta_vei_hid_layers", "delta_vei_att_layers"
+        "delta_nii_layers", "delta_vei_att_layers", "delta_hid_logvol_layers"
     ])
-    d_nii, d_vh, d_va = (None, None, None)
+    d_nii, d_va, d_hv = (None, None, None)
     if has_delta:
         d_nii, _ = _parse_series(df["delta_nii_layers"]) 
-        d_vh, _ = _parse_series(df["delta_vei_hid_layers"]) 
         d_va, _ = _parse_series(df["delta_vei_att_layers"]) 
+        d_hv, _ = _parse_series(df["delta_hid_logvol_layers"]) 
 
     # Heatmaps
     def heatmap(arr: np.ndarray, title: str, fname: str):
@@ -73,26 +73,28 @@ def generate_plots(csv_path: str, out_dir: str):
         plt.savefig(os.path.join(out_dir, fname), dpi=160)
         plt.close()
 
-    # Essential heatmaps only: delta NII and delta VEI_att (adv - clean)
+    # Essential heatmaps: delta NII, delta VEI_att, delta hid_logvol (adv - clean)
     if has_delta and d_nii is not None and d_nii.size:
         heatmap(d_nii, "Delta NII (adv - clean)", "jolt_delta_nii_heatmap.png")
     if has_delta and d_va is not None and d_va.size:
         heatmap(d_va, "Delta VEI_att (adv - clean)", "jolt_delta_vei_att_heatmap.png")
+    if has_delta and d_hv is not None and d_hv.size:
+        heatmap(d_hv, "Delta hid_logvol (adv - clean)", "jolt_delta_hid_logvol_heatmap.png")
 
     # Layer-mean trends
     # Essential trend: clean vs adv layer-mean comparison
 
-    if has_adv and ((nii.size and adv_nii is not None) or (vh.size and adv_vh is not None) or (va.size and adv_va is not None)):
+    if has_adv and ((nii.size and adv_nii is not None) or (va.size and adv_va is not None) or (hv.size and adv_hv is not None)):
         plt.figure(figsize=(8, 4))
         if nii.size and adv_nii is not None:
             plt.plot(steps, np.nanmean(nii, axis=1), label="nii(clean)")
             plt.plot(steps, np.nanmean(adv_nii, axis=1), label="nii(adv)")
-        if vh.size and adv_vh is not None:
-            plt.plot(steps, np.nanmean(vh, axis=1), label="vei_hid(clean)")
-            plt.plot(steps, np.nanmean(adv_vh, axis=1), label="vei_hid(adv)")
         if va.size and adv_va is not None:
             plt.plot(steps, np.nanmean(va, axis=1), label="vei_att(clean)")
             plt.plot(steps, np.nanmean(adv_va, axis=1), label="vei_att(adv)")
+        if hv.size and adv_hv is not None:
+            plt.plot(steps, np.nanmean(hv, axis=1), label="hid_logvol(clean)")
+            plt.plot(steps, np.nanmean(adv_hv, axis=1), label="hid_logvol(adv)")
         plt.xlabel("step")
         plt.ylabel("layer-mean value")
         plt.title("Telemetry trends (clean vs adv)")

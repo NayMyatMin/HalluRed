@@ -11,7 +11,7 @@
 #SBATCH --cpus-per-task=10          # 10 CPUs for faster tokenization/IO
 #SBATCH --mem=48GB                  # 48GB system memory
 #SBATCH --gres=gpu:1                # Request 1 GPU
-#SBATCH --constraint=a100|v100-32gb|v100           # Target GPUs specifically
+#SBATCH --constraint=h100|a100|v100-32gb|v100           # Target GPUs specifically
 #SBATCH --time=02-00:00:00          # Maximum run time of 2 days
 ##SBATCH --mail-type=BEGIN,END,FAIL  # Email notifications for job start, end, and failure
 #SBATCH --partition=researchshort   # Partition assigned

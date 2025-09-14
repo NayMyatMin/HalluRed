@@ -14,6 +14,8 @@ from .lora import attach_lora
 from .telemetry import compute_nii, compute_vei_attn, compute_vei_hidden, compute_telemetry_torch
 from .windows import select_answer_span
 from .plot_telemetry import generate_plots
+from .adv import fgsm_embeddings
+from .loss import telemetry_loss
 
 
 def _extract_qa_pairs(batch: Dict[str, str]) -> List[Tuple[str, str]]:
@@ -120,6 +122,9 @@ def run_training(cfg: JoltCfg):
         # Build per-sample answer windows (supports batch_size >= 1)
         B = tok["input_ids"].shape[0]
         windows_per_sample: List[List[int]] = []
+        prompt_lens = []
+        full_lens = []
+        answer_lens = []
         for b in range(B):
             if "attention_mask" in tok:
                 full_len_b = int(tok["attention_mask"][b].sum().item())
@@ -130,12 +135,20 @@ def run_training(cfg: JoltCfg):
             else:
                 prompt_len_b = int(user_tok["input_ids"].shape[1])
             prompt_len_b = max(0, min(prompt_len_b, full_len_b - 1))
-            windows_per_sample.append(select_answer_span(prompt_len_b, full_len_b))
+            aw = select_answer_span(prompt_len_b, full_len_b)
+            windows_per_sample.append(aw)
+            prompt_lens.append(prompt_len_b)
+            full_lens.append(full_len_b)
+            answer_lens.append(len(aw))
+        # Aggregate simple batch means for logging
+        prompt_len = int(sum(prompt_lens) / max(1, len(prompt_lens)))
+        full_len = int(sum(full_lens) / max(1, len(full_lens)))
+        answer_len = int(sum(answer_lens) / max(1, len(answer_lens)))
 
         # Differentiable telemetry for clean pass (detach for target)
         # Compute clean telemetry (average across batch when B>1)
         def _telemetry_mean(hidden_states, attentions, win_per_sample):
-            acc = {"nii": [], "vei_hid": [], "vei_att": []}
+            acc = {"nii": [], "vei_hid": [], "vei_att": [], "hid_logvol": []}
             for b in range(hidden_states[1].shape[0]):
                 hs_b = tuple(h[b:b+1] for h in hidden_states)
                 at_b = tuple(a[b:b+1] for a in attentions)
@@ -154,27 +167,27 @@ def run_training(cfg: JoltCfg):
         t_clean_t = _telemetry_mean(outputs.hidden_states, outputs.attentions, windows_per_sample)
         t_clean = {
             "nii_win0": t_clean_t["nii"].detach().tolist(),
-            "vei_hid_win0": t_clean_t["vei_hid"].detach().tolist(),
             "vei_att_win0": t_clean_t["vei_att"].detach().tolist(),
+            "hid_logvol_win0": t_clean_t["hid_logvol"].detach().tolist(),
         }
 
         # FGSM: compute adversarial embeddings using pressure = sum per-layer telemetry
-        embedding_layer = model.get_input_embeddings()
-        base_embeds = embedding_layer(tok["input_ids"]).detach()
-        embeds = base_embeds.clone().detach().requires_grad_(True)
-        out_press = model(
-            inputs_embeds=embeds,
-            attention_mask=tok.get("attention_mask"),
-            use_cache=False,
-            output_hidden_states=True,
-            output_attentions=True,
-            return_dict=True,
+        # FGSM via helper utility: define pressure over model outputs
+        def _pressure_fn(outputs):
+            t_press = _telemetry_mean(outputs.hidden_states, outputs.attentions, windows_per_sample)
+            w = getattr(cfg.loss, "weights", {}) or {}
+            w_nii = float(w.get("nii", 1.0))
+            w_va = float(w.get("vei_att", 1.0))
+            w_hv = float(w.get("hid_logvol", 1.0))
+            return (w_nii * t_press["nii"].sum() + w_va * t_press["vei_att"].sum() + w_hv * t_press["hid_logvol"].sum())
+
+        adv_embeds = fgsm_embeddings(
+            model,
+            tok["input_ids"],
+            tok.get("attention_mask"),
+            _pressure_fn,
+            epsilon=cfg.adv.epsilon,
         )
-        # Pressure as sum over layers and metrics (batch-averaged)
-        t_press = _telemetry_mean(out_press.hidden_states, out_press.attentions, windows_per_sample)
-        pressure = (t_press["nii"].sum() + t_press["vei_hid"].sum() + t_press["vei_att"].sum())
-        grad = torch.autograd.grad(pressure, embeds, retain_graph=False, create_graph=False)[0]
-        adv_embeds = (embeds + cfg.adv.epsilon * torch.sign(grad)).detach()
 
         # Adversarial forward and telemetry
         outputs_adv = model(
@@ -186,12 +199,14 @@ def run_training(cfg: JoltCfg):
             return_dict=True,
         )
         t_adv_t = _telemetry_mean(outputs_adv.hidden_states, outputs_adv.attentions, windows_per_sample)
-        # Telemetry matching loss (match adv to clean target)
-        tm_loss = (
-            torch.mean((t_adv_t["nii"] - t_clean_t["nii"].detach()) ** 2)
-            + torch.mean((t_adv_t["vei_hid"] - t_clean_t["vei_hid"].detach()) ** 2)
-            + torch.mean((t_adv_t["vei_att"] - t_clean_t["vei_att"].detach()) ** 2)
-        ) * cfg.loss.lambda_
+        # Telemetry matching loss (match adv to clean target); drop vei_hid; add hid_logvol
+        weights = getattr(cfg.loss, "weights", {}) or {}
+        tm_loss = telemetry_loss(
+            {"nii": t_adv_t["nii"], "vei_att": t_adv_t["vei_att"], "hid_logvol": t_adv_t["hid_logvol"]},
+            {"nii": t_clean_t["nii"], "vei_att": t_clean_t["vei_att"], "hid_logvol": t_clean_t["hid_logvol"]},
+            lambda_=cfg.loss.lambda_,
+            weights=weights,
+        )
 
         loss = loss_ce + tm_loss
 
@@ -218,12 +233,12 @@ def run_training(cfg: JoltCfg):
                 return f"mean={m:.3f},min={min(vals):.3f},max={max(vals):.3f}"
 
             nii_layers = _get_layer_vals(t_clean, "nii_win0")
-            vh_layers = _get_layer_vals(t_clean, "vei_hid_win0")
+            hv_layers = _get_layer_vals(t_clean, "hid_logvol_win0")
             va_layers = _get_layer_vals(t_clean, "vei_att_win0")
 
             print(f"[JOLT] step {step} loss_ce={loss_ce.item():.4f}")
             print(f"  nii(ans) layers: {_fmt_list(nii_layers)} | {_summ(nii_layers)}")
-            print(f"  vei_hid(ans) layers: {_fmt_list(vh_layers)} | {_summ(vh_layers)}")
+            print(f"  hid_logvol(ans) layers: {_fmt_list(hv_layers)} | {_summ(hv_layers)}")
             print(f"  vei_att(ans) layers: {_fmt_list(va_layers)} | {_summ(va_layers)}")
 
             # Append to CSV for plotting
@@ -235,22 +250,22 @@ def run_training(cfg: JoltCfg):
                 "full_len",
                 "answer_len",
                 "nii_layers",
-                "vei_hid_layers",
                 "vei_att_layers",
+                "hid_logvol_layers",
                 "adv_nii_layers",
-                "adv_vei_hid_layers",
                 "adv_vei_att_layers",
+                "adv_hid_logvol_layers",
                 "delta_nii_layers",
-                "delta_vei_hid_layers",
                 "delta_vei_att_layers",
+                "delta_hid_logvol_layers",
             ]
             adv_nii_layers = t_adv_t["nii"].detach().cpu().tolist()
-            adv_vh_layers = t_adv_t["vei_hid"].detach().cpu().tolist()
             adv_va_layers = t_adv_t["vei_att"].detach().cpu().tolist()
+            adv_hv_layers = t_adv_t["hid_logvol"].detach().cpu().tolist()
             # deltas (adv - clean)
             d_nii = (t_adv_t["nii"] - t_clean_t["nii"].detach()).detach().cpu().tolist()
-            d_vh = (t_adv_t["vei_hid"] - t_clean_t["vei_hid"].detach()).detach().cpu().tolist()
             d_va = (t_adv_t["vei_att"] - t_clean_t["vei_att"].detach()).detach().cpu().tolist()
+            d_hv = (t_adv_t["hid_logvol"] - t_clean_t["hid_logvol"].detach()).detach().cpu().tolist()
 
             row = [
                 step,
@@ -258,16 +273,16 @@ def run_training(cfg: JoltCfg):
                 float(tm_loss.item()),
                 int(prompt_len),
                 int(full_len),
-                int(len(answer_window)),
+                int(answer_len),
                 " ".join(f"{v:.6f}" for v in nii_layers),
-                " ".join(f"{v:.6f}" for v in vh_layers),
                 " ".join(f"{v:.6f}" for v in va_layers),
+                " ".join(f"{v:.6f}" for v in t_clean_t["hid_logvol"].detach().cpu().tolist()),
                 " ".join(f"{v:.6f}" for v in adv_nii_layers),
-                " ".join(f"{v:.6f}" for v in adv_vh_layers),
                 " ".join(f"{v:.6f}" for v in adv_va_layers),
+                " ".join(f"{v:.6f}" for v in adv_hv_layers),
                 " ".join(f"{v:.6f}" for v in d_nii),
-                " ".join(f"{v:.6f}" for v in d_vh),
                 " ".join(f"{v:.6f}" for v in d_va),
+                " ".join(f"{v:.6f}" for v in d_hv),
             ]
             write_header = not os.path.exists(csv_path)
             with open(csv_path, "a", newline="") as f:

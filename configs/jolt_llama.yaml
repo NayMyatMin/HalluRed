@@ -16,11 +16,16 @@ adv:
 
 loss:
   lambda_: 0.5
+  weights:
+    hid_logvol: 1.0
+    vei_att: 1.0
+    nii: 0.5
+    vei_hid: 0.0
 
 telemetry:
   nii_weighting: magnitude
   nii_min_norm: 0.0001
-  head_sample: 4
+  head_sample: 0 # all heads
 
 train:
   batch_size: 1

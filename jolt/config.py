@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 import yaml
@@ -27,6 +27,7 @@ class AdvCfg:
 @dataclass
 class LossCfg:
     lambda_: float = 0.3
+    weights: dict = field(default_factory=dict)
 
 
 @dataclass

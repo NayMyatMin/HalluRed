@@ -4,7 +4,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48GB
 #SBATCH --gres=gpu:1
-#SBATCH --constraint=a100|v100-32gb|v100
+#SBATCH --constraint=h100
+#|a100|v100-32gb|v100
 #SBATCH --time=01-00:00:00
 #SBATCH --partition=researchshort
 #SBATCH --account=sunjunresearch
